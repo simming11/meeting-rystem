@@ -11,43 +11,33 @@ use Illuminate\Support\Facades\Storage;
 
 class ActivityController extends Controller
 {
+    // แสดงกิจกรรมของนักศึกษาที่ล็อกอินอยู่
     public function index()
     {
-        // Get the currently logged-in student
-        $student = Auth::guard('student')->user();
+        $student = Auth::guard('student')->user(); // รับข้อมูลนักศึกษาที่ล็อกอินอยู่
 
-        // Retrieve activities for the logged-in student
+        // ดึงกิจกรรมที่เป็นของนักศึกษาคนนั้น
         $activities = Activity::with(['student', 'advisor'])
-            ->where('student_id', $student->id) // Retrieve activities for this specific student
+            ->where('student_id', $student->id)
             ->get();
 
-        // Debug the activities to make sure data is coming through
-        // dd($activities);
-
-        // Pass the activities to the view
+        // ส่งข้อมูลไปยังหน้า student.meet
         return view('student.meet', ['activities' => $activities]);
     }
 
-
-
-
-
-
-
+    // แสดงหน้าแบบฟอร์มสร้างกิจกรรมใหม่
     public function create(Request $request)
     {
-        // Using the 'student' guard to get the authenticated student
-        $student = Auth::guard('student')->user();
+        $student = Auth::guard('student')->user(); // รับข้อมูลนักศึกษาที่ล็อกอินอยู่
 
-        // // Debug: Inspect the student object
-        // dd($student);
-
+        // ตรวจสอบว่านักศึกษามีที่ปรึกษาหรือไม่
         if (!$student || !$student->advisor) {
             return redirect()->back()->withErrors(['advisor_id' => 'No advisor assigned. Please contact the administrator.']);
         }
 
-        $meeting_date = $request->query('meeting_date');
+        $meeting_date = $request->query('meeting_date'); // รับค่าวันที่ประชุมจาก query parameter
 
+        // ส่งข้อมูลไปยังหน้า student.createmeet
         return view('student.createmeet', [
             'students' => Student::all(),
             'advisors' => Advisor::all(),
@@ -55,27 +45,25 @@ class ActivityController extends Controller
         ], compact('student'));
     }
 
-    // Store a new activity
+    // บันทึกกิจกรรมใหม่ลงฐานข้อมูล
     public function store(Request $request)
     {
-        // Validate the request
         $request->validate([
             'student_id' => 'required|exists:students,id',
-            'advisor_id' => 'nullable|exists:advisors,id', // Allow null if no advisor is assigned
+            'advisor_id' => 'nullable|exists:advisors,id', // อนุญาตให้เป็น null ได้
             'meeting_date' => 'required|date',
             'discussion_content' => 'required|string',
             'evidence.*' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
         ]);
 
-        // Gather form data
         $data = $request->all();
 
-        // If no advisor is selected, set it to the advisor of the logged-in student
+        // หากไม่ได้เลือกอาจารย์ที่ปรึกษา ให้ใช้ที่ปรึกษาของนักศึกษาที่ล็อกอินอยู่
         if (empty($data['advisor_id']) && Auth::user()->advisor) {
             $data['advisor_id'] = Auth::user()->advisor->id;
         }
 
-        // Handle evidence upload
+        // อัปโหลดหลักฐาน (ไฟล์รูปภาพ)
         $evidence = [];
         if ($request->hasFile('evidence')) {
             foreach ($request->file('evidence') as $file) {
@@ -83,105 +71,85 @@ class ActivityController extends Controller
                 $evidence[] = $path;
             }
         }
-        $data['evidence'] = json_encode($evidence); // Save as JSON
+        $data['evidence'] = json_encode($evidence); // บันทึกเป็น JSON
 
-        // Create the new activity (meeting)
+        // สร้างกิจกรรมใหม่
         Activity::create($data);
 
-        // Redirect with success message
         return redirect()->route('meet.meet')->with('success', 'Activity created successfully');
     }
 
-//     public function editFORadvisor($id)
-// {
-//     $activity = Activity::findOrFail($id);  // หาข้อมูลกิจกรรมที่ต้องการแก้ไข
-//     return view('advisor.meet', compact('activity'));  // ส่งข้อมูลกิจกรรมไปยัง view
-// }
-
-
-
+    // แสดงแบบฟอร์มแก้ไขกิจกรรม
     public function edit($id)
     {
-        // Find the activity by its ID
-        $activity = Activity::findOrFail($id);
+        $activity = Activity::findOrFail($id); // ค้นหากิจกรรมจาก ID
+        $student = Auth::guard('student')->user(); // รับข้อมูลนักศึกษาที่ล็อกอินอยู่
 
-        // Get the currently logged-in student
-        $student = Auth::guard('student')->user(); // Use 'student' instead of 'loggedInStudent'
-
-        // Get lists of all students and advisors for dropdown options
         $students = Student::all();
         $advisors = Advisor::all();
-        // Decode existing evidence if any
-        $evidence = json_decode($activity->evidence, true) ?? [];
-        // Pass the data to the view
+        $evidence = json_decode($activity->evidence, true) ?? []; // แปลง JSON กลับเป็น array
+
         return view('student.editAppointment', compact('activity', 'students', 'advisors', 'student', 'evidence'));
     }
 
+    // อัปเดตกิจกรรมที่มีอยู่
     public function update(Request $request, $id)
     {
         try {
-            // Validate the incoming request data
             $request->validate([
                 'meeting_date' => 'required|date',
                 'discussion_content' => 'required|string',
-                'evidence.*' => 'nullable|image|mimes:jpg,jpeg,png|max:2048', // Validate image files
+                'evidence.*' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
             ]);
-    
-            // Find the activity by its ID
+
             $activity = Activity::findOrFail($id);
-    
-            // Handle evidence upload (existing evidence and new uploads)
+
+            // จัดการอัปโหลดไฟล์หลักฐาน (เพิ่มไฟล์ใหม่)
             $evidence = json_decode($activity->evidence, true) ?? [];
-    
             if ($request->hasFile('evidence')) {
                 foreach ($request->file('evidence') as $file) {
                     $path = $file->store('evidence', 'public');
-                    $evidence[] = $path; // Add new file to the evidence array
+                    $evidence[] = $path;
                 }
             }
-    
-            // Update the evidence field in the database
             $activity->evidence = json_encode($evidence);
-    
-            // Update other fields
+
+            // อัปเดตข้อมูลอื่น ๆ
             $activity->meeting_date = $request->input('meeting_date');
             $activity->discussion_content = $request->input('discussion_content');
-    
-            // Save the changes
-            $activity->save();
-    
-            // Redirect with success message
+
+            $activity->save(); // บันทึกข้อมูล
+
             return redirect()->route('meet.meet')->with('success', 'Activity updated successfully');
-    
+
         } catch (\Exception $e) {
-            // If there's an exception, return it as JSON
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
-    
+
+    // อัปเดตกิจกรรมโดยอาจารย์ที่ปรึกษา
     public function updateForAdvisor(Request $request, $id)
     {
         $request->validate([
             'advisor_comment' => 'required|string|max:500',
             'status' => 'required|in:Pending,Approved,Rejected',
         ]);
-    
+
         $activity = Activity::findOrFail($id);
         $activity->update([
             'advisor_comment' => $request->input('advisor_comment'),
             'status' => $request->input('status'),
         ]);
-    
+
         return redirect()->route('calendar.meet')->with('success', 'Activity updated successfully by Advisor');
     }
-    
 
-    // Delete an existing activity
+    // ลบกิจกรรม
     public function destroy($id)
     {
         $activity = Activity::findOrFail($id);
 
-        // Delete evidence files
+        // ลบไฟล์หลักฐานที่เกี่ยวข้อง
         if ($activity->evidence) {
             $evidence = json_decode($activity->evidence, true);
             foreach ($evidence as $file) {
@@ -189,7 +157,7 @@ class ActivityController extends Controller
             }
         }
 
-        $activity->delete();
+        $activity->delete(); // ลบกิจกรรม
 
         return redirect()->route('meet.meet')->with('success', 'Activity deleted successfully');
     }
